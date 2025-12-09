@@ -1,6 +1,6 @@
 # aicubos/main.py
 import asyncio
-from agents import Agent
+from aicubos.agents import Agent
 
 async def agent_loop(agent: Agent):
     print(f"{agent.name} is ready. Type 'quit' to exit.")
