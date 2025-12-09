@@ -2,14 +2,11 @@ import json
 import os
 import re
 from datetime import datetime
-from tools import TOOLS, TOOL_INFO
+from aicubos.tools import TOOLS, TOOL_INFO
 
-MEMORY_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory"
-)
-LOG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"
-)
+MEMORY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory")
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+PERSONALITY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "personalities")
 
 os.makedirs(MEMORY_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -18,10 +15,30 @@ LOG_FILE = os.path.join(LOG_DIR, "tool_usage.log")
 
 
 class Agent:
-    def __init__(self, name):
+    MATH_REGEX = re.compile(r"(\d+[\d\s\+\-\*\/\%\(\)\.]+)")
+
+    def __init__(self, name, personality_file=None):
         self.name = name
         self.memory_file = os.path.join(MEMORY_DIR, f"{self.name}_memory.json")
         self.memory = self.load_memory()
+        self.load_personality(personality_file)
+
+    # ------------------------
+    # Personality
+    # ------------------------
+    def load_personality(self, filename):
+        self.personality = {
+            "style": "neutral",
+            "preferred_tools": [],
+            "response_prefix": f"{self.name} says:",
+            "tone": "formal"
+        }
+        if filename:
+            path = os.path.join(PERSONALITY_DIR, filename)
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    self.personality.update(data)
 
     # ------------------------
     # Logging
@@ -45,63 +62,31 @@ class Agent:
             json.dump(self.memory, f, indent=2)
 
     # ------------------------
-    # Tool System (Regex + Commands)
+    # Tool & Context Logic
     # ------------------------
-    MATH_REGEX = re.compile(r"(\d+[\d\s\+\-\*\/\%\(\)\.]+)")
-
     def parse_tool_call(self, text):
         t = text.strip().lower()
+        tools, payloads = [], []
 
-        # User asked for tool help
-        if t == "/tools":
-            return "help", None
-
-        # calc: 2+2
-        if t.startswith("calc:"):
-            return "calculate", t[5:].strip()
-
-        # calc 2+2
-        if t.startswith("calc "):
-            return "calculate", t[5:].strip()
-
-        # calc(...)
-        if t.startswith("calc(") and t.endswith(")"):
-            return "calculate", t[5:-1].strip()
-
-        # use <tool>: <payload>
-        if t.startswith("use "):
-            try:
-                part = t[4:]
-                tool, payload = part.split(":", 1)
-                return tool.strip(), payload.strip()
-            except:
-                return None
-
-        # tool <tool>: <payload>
-        if t.startswith("tool "):
-            try:
-                part = t[5:]
-                tool, payload = part.split(":", 1)
-                return tool.strip(), payload.strip()
-            except:
-                return None
-
-        # Regex-based math detection anywhere in text
+        # Regex-based math detection
         match = self.MATH_REGEX.search(text)
         if match:
-            expr = match.group(1).strip()
-            return "calculate", expr
+            tools.append("calculate")
+            payloads.append({"expression": match.group(1).strip()})
+            return tools, payloads
 
-        return None
+        # Context-aware selection based on preferred tools
+        if self.personality.get("preferred_tools"):
+            tools = self.personality["preferred_tools"]
+            payloads = [{"expression": text} if t=="calculate" else text for _ in tools]
+            return tools, payloads
+
+        return [], [text]
 
     def use_tool(self, tool_name, payload):
-        if tool_name == "help":
-            return self.format_tool_help()
-
         tool = TOOLS.get(tool_name)
         if not tool:
             return f"Error: Tool '{tool_name}' not found."
-
         try:
             result = tool(payload)
             self.log_tool_usage(tool_name, payload)
@@ -109,26 +94,24 @@ class Agent:
         except Exception as e:
             return f"Tool '{tool_name}' failed: {e}"
 
-    def format_tool_help(self):
-        lines = ["Available tools:"]
-        for name, desc in TOOL_INFO.items():
-            lines.append(f"- {name}: {desc}")
-        return "\n".join(lines)
+    def chain_tools(self, tools, payloads):
+        results = []
+        for tool_name, payload in zip(tools, payloads):
+            results.append(self.use_tool(tool_name, payload))
+        return results
 
     # ------------------------
     # Respond Logic
     # ------------------------
     def respond(self, user_input):
-        tool_call = self.parse_tool_call(user_input)
+        tools, payloads = self.parse_tool_call(user_input)
 
-        if tool_call:
-            tool_name, payload = tool_call
-            result = self.use_tool(tool_name, payload)
-            reply = f"[Tool:{tool_name}] → {result}"
+        if tools:
+            results = self.chain_tools(tools, payloads)
+            reply = " | ".join([f"[Tool:{t}] → {r}" for t, r in zip(tools, results)])
         else:
-            reply = f"{self.name} remembers you said: {user_input}"
+            reply = f"{self.personality.get('response_prefix', self.name + ' says:')} {user_input}"
 
         self.memory.append({"input": user_input, "reply": reply})
         self.save_memory()
-
         return reply
