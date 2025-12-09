@@ -1,18 +1,20 @@
-# Python cache
+# Ignore runtime logs
+logs/
+*.log
+
+# Ignore Python cache
 __pycache__/
-*.py[cod]
+*.pyc
 
-# IDE files
-.idea/
+# Ignore memory files
+memory/
+*.json
 
-# Environment files
-.env
+# Ignore virtual environments
+.venv/
 venv/
 env/
 
-# Local data or memory
-memory/
-
-# OS files
+# Ignore OS junk
 .DS_Store
 Thumbs.db
